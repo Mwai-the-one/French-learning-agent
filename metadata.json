@@ -1,5 +1,5 @@
 {
-  "name": "French Tutor",
-  "description": "A stateful tutor for Beginner French Language and Culture, leveraging Gemini API for dynamic lesson content and feedback.",
+  "name": "French AI Tutor",
+  "description": "A stateful AI tutor for beginner French language and culture, providing interactive lessons and quizzes.",
   "requestFramePermissions": []
 }

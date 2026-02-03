@@ -1,234 +1,172 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { TutorResponse, Choice, TutorState } from './types';
-import { geminiService } from './services/geminiService';
-import Button from './components/Button';
+import { Phase, PhaseResponse } from './types';
+import { InterfaceDisplay } from './components/InterfaceDisplay';
+import { callGemini } from './services/geminiService';
+import { TOTAL_QUESTIONS } from './constants';
 
-// Initial state for the tutor
-const INITIAL_TUTOR_STATE: TutorResponse = {
-  phase: 'intro',
-  state: { q: 0, score: 0 },
-  data: {},
-  ui: {
-    screen: 'intro',
-    text: "Welcome to Introduction to French Language and French Culture! Let's begin our journey.",
-    choices: [],
-    input: 'none',
-    progress: 0,
-  },
-};
-
-const App: React.FC = () => {
-  const [tutorResponse, setTutorResponse] = useState<TutorResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+function App() {
+  const [phaseResponse, setPhaseResponse] = useState<PhaseResponse | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedChoiceId, setSelectedChoiceId] = useState<number | null>(null);
+  const [learnerCommandInput, setLearnerCommandInput] = useState<string>('');
 
-  // Ref to hold the current phase and state to avoid stale closures in sendMessage
-  const currentPhaseRef = useRef<TutorResponse['phase']>('intro');
-  const currentQRef = useRef<number>(0);
-  const currentScoreRef = useRef<number>(0);
+  // State to manage the tutor's persistent info
+  const tutorStateRef = useRef({
+    question_index: 0,
+    score: 0,
+    currentPhase: 'intro' as Phase,
+    correctAnswerId: null as number | null, // Stores the correct answer ID for the current 'ask' question
+    selectedOptionLabel: null as string | null, // Stores the label of the option chosen by the user for evaluation feedback
+  });
 
-  const processTutorTurn = useCallback(async (
-    phase: TutorResponse['phase'],
-    q: number,
-    score: number,
-    userInput?: number,
+  const fetchGeminiResponse = useCallback(async (
+    isPreviousAnswerCorrect: boolean | null = null,
+    submitLearnerInput: string | null = null, // New: Pass learner's free-form text input for commands
   ) => {
-    setLoading(true);
+    setIsLoading(true);
     setError(null);
     try {
-      const response = await geminiService.sendMessage(phase, q, score, userInput);
-      setTutorResponse(response);
+      const { currentPhase, question_index, score, selectedOptionLabel } = tutorStateRef.current;
 
-      // Update refs with the new state from the response
-      currentPhaseRef.current = response.phase;
-      currentQRef.current = response.state.q;
-      currentScoreRef.current = response.state.score;
+      const response = await callGemini(
+        currentPhase,
+        { question_index, score },
+        isPreviousAnswerCorrect,
+        selectedOptionLabel, // Pass this for 'evaluate' context or 'review' command
+        submitLearnerInput, // Pass the command/text input
+      );
 
-      setSelectedChoiceId(null); // Reset selected choice for next question
+      // Update local tutor state based on Gemini's response for the next interaction
+      tutorStateRef.current = {
+        ...tutorStateRef.current,
+        currentPhase: response.phase,
+        question_index: response.state.question_index,
+        score: response.state.score,
+        correctAnswerId: response.correct_answer_id !== undefined ? response.correct_answer_id : null,
+        selectedOptionLabel: null, // Reset after processing evaluation or new phase
+      };
+
+      setPhaseResponse(response);
     } catch (err) {
-      console.error("Failed to fetch tutor response:", err);
-      setError("Failed to load tutor content. Please try again.");
+      console.error("Failed to fetch Gemini response:", err);
+      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   }, []); // Empty dependency array means this function is created once
 
+  // Initial fetch when component mounts
   useEffect(() => {
-    // Initial load: start the intro phase
-    if (!tutorResponse) {
-      processTutorTurn(
-        INITIAL_TUTOR_STATE.phase,
-        INITIAL_TUTOR_STATE.state.q,
-        INITIAL_TUTOR_STATE.state.score
-      );
-    }
+    fetchGeminiResponse();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on mount
+  }, []); // Only run once on mount
 
-  const handleAction = async (actionInput?: number) => {
-    if (!tutorResponse) return;
+  const handleOptionSelect = useCallback((selectedOptionId: number, selectedOptionLabel: string) => {
+    if (tutorStateRef.current.currentPhase !== 'ask' || isLoading) return;
 
-    // Use refs for current state to ensure latest values are used in the callback
-    const currentPhase = currentPhaseRef.current;
-    const currentQ = currentQRef.current;
-    const currentScore = currentScoreRef.current;
+    let isCorrect = false;
+    const { correctAnswerId, question_index, score } = tutorStateRef.current;
 
-    let nextPhase: TutorResponse['phase'] = currentPhase;
-    let nextQ: number = currentQ;
-    let nextScore: number = currentScore;
-    let userInput: number | undefined = actionInput;
+    if (correctAnswerId !== null && selectedOptionId === correctAnswerId) {
+      isCorrect = true;
+      tutorStateRef.current.score = score + 1; // Update score locally
+    }
 
-    if (currentPhase === 'intro') {
-      nextPhase = 'teach';
-    } else if (currentPhase === 'teach') {
-      nextPhase = 'ask';
-      nextQ = 0; // Reset q for the first question
-    } else if (currentPhase === 'ask') {
-      if (userInput === undefined) {
-        // This shouldn't happen if the submit button is properly guarded
-        setError("Please select an answer.");
-        return;
+    // Advance question index for next 'ask' phase or 'report'
+    // This value is passed to Gemini, which then updates its internal state.
+    tutorStateRef.current.question_index = question_index + 1;
+    tutorStateRef.current.selectedOptionLabel = selectedOptionLabel; // Store for feedback in 'evaluate'
+
+    // Transition to evaluate phase
+    tutorStateRef.current.currentPhase = 'evaluate';
+    fetchGeminiResponse(isCorrect);
+  }, [isLoading, fetchGeminiResponse]);
+
+  const handleContinue = useCallback(() => {
+    if (isLoading) return;
+
+    // If currently in 'paused' phase, 'Continue' acts as a 'resume' command
+    if (tutorStateRef.current.currentPhase === 'paused') {
+      fetchGeminiResponse(null, "resume");
+    } else {
+      // Normal phase progression
+      if (tutorStateRef.current.currentPhase === 'evaluate') {
+        // Gemini's prompt handles whether to go to 'ask' or 'report' after 'evaluate'
+        // based on question_index and TOTAL_QUESTIONS
+        // We set the target phase here, and Gemini confirms/updates its state accordingly.
+        if (tutorStateRef.current.question_index < TOTAL_QUESTIONS) {
+          tutorStateRef.current.currentPhase = 'ask';
+        } else {
+          tutorStateRef.current.currentPhase = 'report';
+        }
+      } else if (tutorStateRef.current.currentPhase === 'intro') {
+        tutorStateRef.current.currentPhase = 'teach';
+      } else if (tutorStateRef.current.currentPhase === 'teach') {
+        tutorStateRef.current.currentPhase = 'ask';
+      } else if (tutorStateRef.current.currentPhase === 'report') {
+        tutorStateRef.current.currentPhase = 'completed';
       }
-      nextPhase = 'evaluate';
-    } else if (currentPhase === 'evaluate') {
-      nextQ = currentQ + 1; // Increment question index for the next 'ask' or 'report'
-      if (nextQ < 5) { // Assuming 5 questions (0-4)
-        nextPhase = 'ask';
-      } else {
-        nextPhase = 'report';
-      }
-    } else if (currentPhase === 'report') {
-      nextPhase = 'completed'; // After report, the tutorial is completed
-    } else if (currentPhase === 'completed') {
-        // Allow restarting
-        setTutorResponse(null); // Reset to re-trigger initial load
-        currentPhaseRef.current = 'intro';
-        currentQRef.current = 0;
-        currentScoreRef.current = 0;
-        processTutorTurn(
-            INITIAL_TUTOR_STATE.phase,
-            INITIAL_TUTOR_STATE.state.q,
-            INITIAL_TUTOR_STATE.state.score
-        );
-        return; // Don't call processTutorTurn again after reset
+      fetchGeminiResponse(); // Call without command input
     }
+  }, [isLoading, fetchGeminiResponse]);
 
-    await processTutorTurn(nextPhase, nextQ, nextScore, userInput);
-  };
+  const handleCommandSubmit = useCallback(() => {
+    if (isLoading || learnerCommandInput.trim() === '') return;
 
-  const renderContent = () => {
-    if (loading) {
-      return (
-        <div className="flex flex-col items-center justify-center p-6 space-y-4 animate-pulse">
-          <div className="h-4 w-3/4 bg-blue-200 rounded"></div>
-          <div className="h-4 w-1/2 bg-blue-200 rounded"></div>
-          <div className="h-4 w-2/3 bg-blue-200 rounded"></div>
-          <p className="text-lg text-blue-600">Loading your French lesson...</p>
-        </div>
-      );
-    }
+    const command = learnerCommandInput.trim().toLowerCase();
+    // Special handling for "continue" command when in "paused" phase, map it to "resume"
+    const submitCommand = (command === "continue" && tutorStateRef.current.currentPhase === 'paused') ? "resume" : command;
 
-    if (error) {
-      return (
-        <div className="p-6 text-red-600 text-center font-semibold">
-          <p>{error}</p>
-          <Button onClick={() => handleAction()} className="mt-4">Retry</Button>
-        </div>
-      );
-    }
+    fetchGeminiResponse(null, submitCommand);
+    setLearnerCommandInput(''); // Clear the input field after sending
+  }, [isLoading, learnerCommandInput, fetchGeminiResponse]);
 
-    if (!tutorResponse) {
-      return (
-        <div className="flex items-center justify-center h-full text-gray-500">
-          Initializing tutor...
-        </div>
-      );
-    }
+  // New: Handle Exit command
+  const handleExit = useCallback(() => {
+    if (isLoading) return;
+    fetchGeminiResponse(null, "exit");
+    setLearnerCommandInput(''); // Clear input field if user was typing
+  }, [isLoading, fetchGeminiResponse]);
 
-    const { ui, state, phase } = tutorResponse;
-
+  // Render the InterfaceDisplay with current data
+  if (!phaseResponse) {
     return (
-      <div className="flex flex-col flex-grow p-6 sm:p-8">
-        <div className="flex-grow">
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">
-            {ui.screen === 'intro' && "Bienvenue !"}
-            {ui.screen === 'lesson' && "Your First French Words"}
-            {ui.screen === 'question' && `Question ${state.q + 1} of 5`}
-            {ui.screen === 'feedback' && "Feedback"}
-            {ui.screen === 'final' && "Tutorial Complete!"}
-          </h2>
-          <p className="text-gray-700 text-lg mb-6 leading-relaxed whitespace-pre-wrap">{ui.text}</p>
-
-          {ui.input === 'multiple_choice' && ui.choices.length > 0 && (
-            <div className="space-y-3">
-              {ui.choices.map((choice) => (
-                <button
-                  key={choice.id}
-                  className={`block w-full text-left p-4 border rounded-lg transition-all duration-200
-                              ${selectedChoiceId === choice.id
-                                ? 'bg-blue-100 border-blue-500 text-blue-800 shadow-md'
-                                : 'bg-gray-50 border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-700'
-                              }`}
-                  onClick={() => setSelectedChoiceId(choice.id)}
-                  disabled={loading}
-                >
-                  {choice.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Persistent CTA at the bottom */}
-        <div className="sticky bottom-0 bg-white pt-6 border-t border-gray-100 -mx-6 -mb-6 sm:-mx-8 sm:-mb-8 px-6 sm:px-8 flex flex-col items-center">
-          <div className="w-full bg-gray-200 rounded-full h-2.5 mb-6">
-            <div
-              className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out"
-              style={{ width: `${ui.progress}%` }}
-            ></div>
-          </div>
-
-          {/* Fix: `feedback` is a UI screen type, not a phase. The corresponding phase is `evaluate`. */}
-          {(phase === 'intro' || phase === 'teach' || phase === 'evaluate') && (
-            <Button
-              onClick={() => handleAction()}
-              fullWidth
-              disabled={loading}
-            >
-              {phase === 'intro' ? 'Start Lesson' : phase === 'teach' ? 'Continue to Quiz' : 'Next'}
-            </Button>
-          )}
-
-          {phase === 'ask' && (
-            <Button
-              onClick={() => handleAction(selectedChoiceId!)} // Non-null assertion as button is disabled if null
-              fullWidth
-              disabled={loading || selectedChoiceId === null}
-            >
-              Submit Answer
-            </Button>
-          )}
-
-          {phase === 'report' && (
-            <Button
-              onClick={() => handleAction()}
-              fullWidth
-              disabled={loading}
-            >
-              Restart Tutorial
-            </Button>
-          )}
-        </div>
-      </div>
+      <InterfaceDisplay
+        data={{
+          title: "Loading Tutor...",
+          content: "Please wait while the AI tutor prepares.",
+          instructions: "",
+          input_type: "none",
+          progress: 0,
+        }}
+        onOptionSelect={() => {}}
+        onContinue={() => {}}
+        isLoading={isLoading}
+        error={error}
+        commandText={learnerCommandInput}
+        onCommandTextChange={setLearnerCommandInput}
+        onCommandSubmit={() => {}} // Disabled until phaseResponse is loaded
+        currentPhase={'intro'} // Default phase for initial loading
+        onExit={() => {}} // Disabled until phaseResponse is loaded
+      />
     );
-  };
+  }
 
   return (
-    <div className="relative w-full max-w-2xl bg-white shadow-xl rounded-lg overflow-hidden flex flex-col h-[90vh] sm:h-[80vh]">
-      {renderContent()}
-    </div>
+    <InterfaceDisplay
+      data={phaseResponse.interface}
+      onOptionSelect={handleOptionSelect}
+      onContinue={handleContinue}
+      isLoading={isLoading}
+      error={error}
+      commandText={learnerCommandInput}
+      onCommandTextChange={setLearnerCommandInput}
+      onCommandSubmit={handleCommandSubmit}
+      currentPhase={phaseResponse.phase} // Pass the actual phase
+      onExit={handleExit} // Pass the new handleExit function
+    />
   );
-};
+}
 
 export default App;

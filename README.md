@@ -1,237 +1,252 @@
+
 # Multi-Agent Beginner French Tutor Using Gemini 2.5 Flash
 
 ## Abstract
-This document details the design and implementation of a lightweight, stateful, multi-agent educational system for beginner French language and culture. Leveraging the Gemini 2.5 Flash large language model, the system provides interactive micro-lessons and quizzes, optimized for low token usage and reduced latency. Its architecture is based on a simulated multi-agent paradigm and a well-defined phase-based state machine, ensuring structured, turn-based interaction via a minimal persistent state and a JSON-formatted interface.
+This document describes a prototype for a lightweight, stateful, multi-agent educational system designed to provide interactive micro-lessons on beginner French language and culture. The system leverages the Gemini 2.5 Flash model, emphasizing token efficiency, low latency, and a structured JSON-based interaction interface. It simulates an internal multi-agent architecture (planner, explainer, quiz, feedback, progress, motivation) to deliver a coherent and adaptive learning experience while maintaining minimal persistent state.
 
 ## Introduction
-The integration of Artificial Intelligence (AI) into educational technology holds significant promise for personalized and adaptive learning experiences. Traditional static learning platforms often lack the dynamic adaptability required to cater to diverse learner needs. This project addresses this gap by developing an AI-driven tutor that not only delivers content but also simulates intelligent pedagogical agents to guide learners. The rationale for a multi-agent architecture stems from the need to modularize distinct pedagogical functions—such as content planning, explanation, assessment, feedback, and motivational support—into conceptually separate, albeit simulated, entities. This approach enhances system clarity, maintainability, and the potential for future specialized agent development.
+The increasing demand for personalized and accessible education has driven significant advancements in AI-based tutoring systems. Traditional AI tutors often struggle with dynamic content generation, contextual understanding, and resource efficiency. This project addresses these challenges by employing a multi-agent architectural paradigm, which allows for modularized intelligent behaviors and a flexible, phase-based interaction flow. The rationale for a multi-agent system lies in its ability to decompose complex tutoring functionalities into specialized, manageable components, enhancing adaptability and maintainability. This design also facilitates the integration of large language models (LLMs) by structuring prompts and responses for optimal performance and interpretability.
 
 ## System Architecture
-The system employs a simulated multi-agent architecture, where distinct pedagogical roles are conceptually assigned to internal agents:
-*   **Planner Agent**: Determines the sequence of educational activities (e.g., transition from introduction to lesson, lesson to quiz).
-*   **Explainer Agent**: Generates concise lesson content and explanations, ensuring clarity and cultural context.
-*   **Quiz Agent**: Formulates multiple-choice questions based on the lesson material.
-*   **Feedback Agent**: Provides evaluative feedback on learner responses, offering correct explanations and encouragement.
-*   **Progress Agent**: Manages and tracks the learner's advancement through the curriculum.
-*   **Motivation Agent**: Infuses encouraging tones and summaries to sustain learner engagement.
+The system operates on a simulated multi-agent architecture, where distinct functional roles are conceptualized to guide the learner's journey without explicitly deploying separate computational agents. These roles include:
+*   **Planner:** Determines the overall lesson progression and transitions between phases.
+*   **Explainer:** Generates concise teaching content and clarifications.
+*   **Quiz Master:** Formulates multiple-choice questions based on taught material.
+*   **Feedback Provider:** Evaluates learner responses and delivers corrective or affirming feedback.
+*   **Progress Tracker:** Monitors learner advancement through the curriculum.
+*   **Motivation Enhancer:** Maintains an encouraging tone throughout the interaction.
 
-This architecture interacts with a minimal persistent state, storing only the current question index (`state.q`) and the cumulative score (`state.score`). This design choice is critical for reducing computational overhead, minimizing memory footprint, and ensuring that the large language model (LLM) is not burdened with extensive context management across turns. The system generates content dynamically for the current phase, rather than maintaining comprehensive internal representations of lessons or question banks.
+State management is maintained through a minimal persistent state, comprising only the `question_index` and `score`. This design choice minimizes the computational overhead associated with state serialization and retrieval, significantly reducing memory footprint and improving response times. The justification for this minimal-state approach is rooted in the strategy of offloading complex contextual memory and content generation to the underlying Gemini 2.5 Flash model, which is capable of synthesizing coherent responses based on a structured, history-aware prompt in each turn.
 
 ## State Machine Design
-The tutor's interaction flow is governed by a deterministic, phase-based state machine, orchestrating a turn-based interaction cycle:
+The tutoring system employs a deterministic phase-based state machine to orchestrate the learning experience. The interaction flow is strictly sequential and turn-based, ensuring a controlled and predictable pedagogical progression. The phases are defined as:
 
-1.  **`intro`**: Initiates the tutorial with a brief welcome.
-    *   `ui.screen` = "intro"
-    *   `ui.input` = "none"
-    *   `ui.progress` = 0
-    *   Transition: Automatically moves to `teach`.
+1.  **`intro`**: Initiates the lesson, welcomes the learner, and provides a brief overview.
+2.  **`teach`**: Introduces new beginner French vocabulary and associated cultural context.
+3.  **`ask`**: Presents a single multiple-choice question derived from the `teach` phase content.
+4.  **`evaluate`**: Assesses the learner's answer to the `ask` phase question and provides feedback.
+5.  **`report`**: Summarizes the learner's performance upon completion of all questions.
+6.  **`completed`**: Signifies the end of the lesson.
+7.  **`paused`**: A temporary state for human intervention commands or user-initiated pauses.
 
-2.  **`teach`**: Introduces 3-5 beginner vocabulary words with short cultural context, keeping the explanation under 120 words.
-    *   `ui.screen` = "lesson"
-    *   `ui.input` = "none"
-    *   `ui.progress` = 10
-    *   Transition: Automatically moves to `ask`.
-
-3.  **`ask`**: Presents one multiple-choice question.
-    *   `ui.screen` = "question"
-    *   `ui.input` = "multiple_choice"
-    *   `ui.progress` = 10 + (`state.q` * 18)
-    *   Transition: Awaits learner input, then moves to `evaluate`.
-
-4.  **`evaluate`**: Assesses the learner's answer. If correct, increments `state.score`. Provides a very short explanation (1-2 sentences).
-    *   `ui.screen` = "feedback"
-    *   `ui.input` = "none"
-    *   Transition: If `state.q < 4`, increments `state.q` and returns to `ask`. Otherwise, transitions to `report`.
-
-5.  **`report`**: Delivers a concise, encouraging summary of the learner's performance.
-    *   `ui.screen` = "final"
-    *   `ui.progress` = 100
-    *   Transition: Automatically moves to `completed`.
-
-6.  **`completed`**: The tutorial concludes, allowing for restart.
-
-This turn-based interaction, coupled with minimal state transitions, ensures predictable system behavior and efficient resource utilization.
+Transitions between phases are governed by internal logic and user input. For instance, after `evaluate`, the system transitions to `ask` if more questions remain, or to `report` if the quiz is complete. Human intervention commands (`review`, `clarify`, `report_issue`, `pause`, `resume`, `exit`) allow for dynamic redirection or suspension of the lesson, with state integrity maintained during such diversions.
 
 ## Data Structure and Interface Specification
-The system communicates with the learner through a structured JSON interface, ensuring unambiguous parsing and rendering by the client-side UI.
+The interaction between the learner and the system occurs via a structured JSON interface. Only the `interface` object is rendered to the learner, abstracting the internal logic.
 
 **JSON Response Format Example:**
 ```json
 {
   "phase": "ask",
   "state": {
-    "q": 1,
-    "score": 0
+    "question_index": 1,
+    "score": 1
   },
-  "data": {},
-  "ui": {
-    "screen": "question",
-    "text": "How do you say 'Thank you' in French?",
-    "choices": [
+  "interface": {
+    "title": "Question 2: French Greetings",
+    "content": "What is the appropriate response to 'Bonjour' in the morning?",
+    "instructions": "Select the best option.",
+    "input_type": "multiple_choice",
+    "options": [
       { "id": 0, "label": "Au revoir" },
-      { "id": 1, "label": "Oui" },
-      { "id": 2, "label": "Merci" },
-      { "id": 3, "label": "Non" }
+      { "id": 1, "label": "Bonjour" },
+      { "id": 2, "label": "Merci" }
     ],
-    "input": "multiple_choice",
-    "progress": 28
-  }
+    "progress": 40
+  },
+  "correct_answer_id": 1
 }
 ```
 
-**Top-Level Fields Explanation:**
-*   `phase` (string): Indicates the current operational stage of the tutor (e.g., "intro", "teach", "ask").
-*   `state` (object): Contains minimal persistent state variables.
-    *   `q` (integer): The current question index (0-indexed).
-    *   `score` (integer): The cumulative count of correct answers.
-*   `data` (object): Reserved for additional ephemeral data. In this implementation, it remains empty to adhere to minimal state rules.
-*   `ui` (object): Dictates the client-side user interface presentation and interaction.
-    *   `screen` (string): Specifies the current screen type (e.g., "intro", "lesson", "question", "feedback", "final").
-    *   `text` (string): The primary textual content to be displayed to the user.
-    *   `choices` (array of objects): For `multiple_choice` input, provides options for the user to select. Each object contains `id` (integer) and `label` (string).
-    *   `input` (string): Defines the expected input type from the user (e.g., "none", "multiple_choice").
-    *   `progress` (integer): A percentage indicating the learner's progress through the tutorial.
+**Explanation of Top-Level Fields:**
+*   **`phase`**: A string indicating the current stage of the lesson (`intro`, `teach`, `ask`, `evaluate`, `report`, `completed`, `paused`).
+*   **`state`**: An object containing the learner's persistent progress:
+    *   **`question_index`**: Integer representing the number of questions addressed so far.
+    *   **`score`**: Integer representing the number of correct answers.
+*   **`interface`**: An object encapsulating all learner-facing content:
+    *   **`title`**: String for the current section's heading.
+    *   **`content`**: String containing the main instructional text or question.
+    *   **`instructions`**: String providing guidance for the learner's next action.
+    *   **`input_type`**: String specifying the expected input format (`none` for continuation, `multiple_choice` for quizzes).
+    *   **`options`**: (Optional) An array of objects for multiple-choice questions, each with an `id` and `label`.
+    *   **`progress`**: Integer (0-100) indicating the overall lesson completion percentage.
+*   **`correct_answer_id`**: (Optional) Integer, present only in the `ask` phase, indicating the `id` of the correct option for the current question. This is used internally for evaluation and is not exposed to the learner during the `ask` phase to preserve academic integrity.
 
 ## Performance Optimization Strategy
-Performance optimization focuses on minimizing LLM interaction latency and token consumption, critical for real-time educational applications.
-*   **Token Reduction**:
-    *   **Concise Prompts**: All prompts to the Gemini model are meticulously crafted to be brief and direct, requesting specific outputs (e.g., "1-2 sentences", "under 120 words").
-    *   **Minimal Context Passing**: The LLM is provided only with the necessary contextual information for the current turn, avoiding the re-transmission of full lesson content or extensive conversation history.
-    *   **`maxOutputTokens`**: Explicitly set to a low value (e.g., 100-200 tokens) for generated responses, preventing verbose outputs.
-    *   **`thinkingConfig: { thinkingBudget: 0 }`**: Used to prioritize speed over extensive reasoning for tasks where immediate, direct responses are sufficient, suitable for a tutor delivering structured, pre-defined content.
-*   **Latency Considerations**:
-    *   **Single-Turn Generation**: The system requests only one piece of content (lesson segment, question, feedback) per LLM call, avoiding complex multi-part generation tasks.
-    *   **Dedicated Model**: Utilizes `gemini-3-flash-preview` which is optimized for speed and efficiency in text-generation tasks.
-*   **Design Trade-offs**: The minimal-state, single-turn generation approach trades off deep conversational context awareness for enhanced performance and cost-efficiency. This is deemed acceptable for a beginner-level micro-lesson with predefined content structure.
+The system's performance optimization focuses on token reduction and latency mitigation, critical for efficient LLM interaction.
+
+**Token Reduction Techniques:**
+*   **Minimal State Transfer:** Only `question_index` and `score` are maintained as persistent state. Full lesson content or question banks are not stored. Instead, the LLM dynamically generates content based on the current phase and minimal state variables.
+*   **Concise Prompts:** Prompts are meticulously crafted to be highly specific and instructional, eliminating verbose explanations. The prompt itself contains the state machine logic, phase rules, and constraints, guiding the LLM to generate targeted responses.
+*   **Single-Turn Generation:** The LLM generates only one question or explanation per interaction, avoiding pre-generation of entire lessons.
+*   **Strict Output Schema:** The system enforces a precise JSON output schema, preventing the LLM from generating extraneous text or alternative formats, thereby reducing token waste and simplifying parsing.
+
+**Latency Considerations:**
+*   The use of Gemini 2.5 Flash, a model optimized for speed, is a primary strategy for low-latency responses.
+*   The minimal data transfer and concise prompts reduce the computational load on the LLM, leading to faster inference times.
+*   Caching mechanisms (not explicitly implemented in the provided code but a consideration) could further reduce latency for repetitive requests.
+
+**Design Trade-offs:**
+The minimal-state and token-efficient design prioritizes speed and cost-effectiveness. The trade-off is that the LLM must regenerate some contextual information or adapt its response based on explicit instructions in each prompt, rather than relying on a continuously updated, rich conversational history managed externally. This demands a highly robust and detailed prompt engineering strategy to ensure consistency and prevent drifts in content or tone.
 
 ## Implementation Details
-The project utilizes the **Gemini 2.5 Flash** model for all generative AI capabilities, chosen for its balance of performance and cost-effectiveness suitable for interactive applications. The frontend is built with React and TypeScript, interacting with the `geminiService` layer which orchestrates calls to the Google GenAI SDK.
+The core intelligence of the system is powered by Google's Gemini 2.5 Flash model. This model is selected for its balance of performance and efficiency suitable for interactive tutoring applications. The frontend is implemented in React/TypeScript, handling the UI rendering and user interactions.
 
-**Conceptual Python API Usage Example (for interacting with the tutor's JSON API):**
+**Example API Usage in Python (Conceptual):**
+While the frontend is React/TypeScript, the underlying Gemini API interaction would conceptually follow this pattern (assuming `process.env.API_KEY` is accessible):
+
 ```python
-import requests
+import os
+import google.generativeai as genai
 import json
 
-TUTOR_API_ENDPOINT = "http://localhost:3000/api/tutor" # Example local endpoint
+def call_gemini_tutor(current_phase, current_state, is_previous_answer_correct, selected_option_label, learner_input, total_questions):
+    genai.configure(api_key=os.environ["API_KEY"])
+    model = genai.GenerativeModel('gemini-3-flash-preview')
 
-def send_to_tutor(current_phase: str, current_q: int, current_score: int, user_input: int = None):
-    payload = {
-        "currentPhase": current_phase,
-        "currentQ": current_q,
-        "currentScore": current_score,
-        "userInput": user_input
-    }
-    headers = {'Content-Type': 'application/json'}
-    try:
-        response = requests.post(TUTOR_API_ENDPOINT, data=json.dumps(payload), headers=headers)
-        response.raise_for_status() # Raise an exception for HTTP errors
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"API request failed: {e}")
-        return None
+    # Construct prompt as defined in services/geminiService.ts
+    prompt = f"""
+    You are a stateful AI tutor for Beginner French Language and Culture. Your goal is to guide the learner through a lesson, quiz them, and provide feedback, following specific phases.
 
-# Initial interaction
-initial_response = send_to_tutor("intro", 0, 0)
-print(json.dumps(initial_response, indent=2))
+    All responses MUST be a single, valid JSON object following this exact schema. Do NOT include any other text, markdown, or explanation outside the JSON.
 
-# Example: Process 'teach' phase to get 'ask' phase
-if initial_response and initial_response['phase'] == 'teach':
-    next_response = send_to_tutor(initial_response['phase'], initial_response['state']['q'], initial_response['state']['score'])
-    print(json.dumps(next_response, indent=2))
-    # Assuming user selects answer '1' for the first question
-    # next_response_after_answer = send_to_tutor(next_response['phase'], next_response['state']['q'], next_response['state']['score'], 1)
-    # print(json.dumps(next_response_after_answer, indent=2))
+    ```json
+    {{
+      "phase": "string",
+      "state": {{
+        "question_index": "number",
+        "score": "number"
+      }},
+      "interface": {{
+        "title": "string",
+        "content": "string",
+        "instructions": "string",
+        "input_type": "string",
+        "options": "array",
+        "progress": "number"
+      }}
+      ,"correct_answer_id": "number"
+    }}
+    ```
+
+    Current Interaction Context:
+    - Current Phase: "{current_phase}"
+    - Current Question Index: {current_state['question_index']}
+    - Current Score: {current_state['score']}
+    - Total Questions in this session: {total_questions}
+    {"The learner's answer to the previous question was " + ("correct" if is_previous_answer_correct else "incorrect") + f". The learner chose \"{selected_option_label}\"." if current_phase == 'evaluate' else ""}
+    {"The learner has entered a command or text input: \"" + learner_input + "\"." if learner_input else ""}
+    # ... (rest of the detailed prompt instructions as in services/geminiService.ts) ...
+
+    Generate the response for the next step in the interaction, strictly following the JSON format and phase rules.
+    """
+
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            response_mime_type="application/json"
+        )
+    )
+    return json.loads(response.text)
+
+# Example Usage
+# current_state = {"question_index": 0, "score": 0}
+# response = call_gemini_tutor("intro", current_state, None, None, None, 3)
+# print(response)
 ```
-*Note: The actual implementation uses client-side JavaScript (`@google/genai` SDK) directly; the Python snippet above illustrates how an external system might interact with the defined JSON interface.*
 
 ## Example Interaction
+Here is a simplified sequence of a learner-system interaction:
 
-**Turn 1: Initial `intro` phase (System provides initial welcome)**
+**System (Phase: `intro`)**
 ```json
 {
   "phase": "intro",
-  "state": { "q": 0, "score": 0 },
-  "data": {},
-  "ui": {
-    "screen": "intro",
-    "text": "Welcome to Introduction to French Language and French Culture! Let's begin our journey.",
-    "choices": [],
-    "input": "none",
+  "state": { "question_index": 0, "score": 0 },
+  "interface": {
+    "title": "Bienvenue au Tutor Français!",
+    "content": "Welcome to your beginner French lesson! We'll learn some basic words, cultural tips, and test your knowledge.",
+    "instructions": "Click Continue to begin.",
+    "input_type": "none",
     "progress": 0
   }
 }
 ```
 
-**Turn 2: After user clicks "Start Lesson" (System transitions to `teach` phase)**
+**Learner Action:** Clicks "Continue" (triggers `handleContinue`, next turn will be `teach`)
+
+**System (Phase: `teach`)**
 ```json
 {
   "phase": "teach",
-  "state": { "q": 0, "score": 0 },
-  "data": {},
-  "ui": {
-    "screen": "lesson",
-    "text": "Bonjour (Hello/Good day) is a fundamental greeting used all day. Au revoir (Goodbye) is the polite farewell. Merci (Thank you) shows gratitude. S'il vous plaît (Please) is for politeness, and Excusez-moi (Excuse me) is for apologies or getting attention.",
-    "choices": [],
-    "input": "none",
+  "state": { "question_index": 0, "score": 0 },
+  "interface": {
+    "title": "Lesson 1: Greetings",
+    "content": "Bonjour means Hello/Good day. It's used formally and informally. Au revoir means Goodbye. Merci means Thank you. Using these politely is key in French culture!",
+    "instructions": "Click Continue for a question.",
+    "input_type": "none",
     "progress": 10
   }
 }
 ```
 
-**Turn 3: After user clicks "Continue to Quiz" (System transitions to `ask` phase, Q0)**
+**Learner Action:** Clicks "Continue" (triggers `handleContinue`, next turn will be `ask`)
+
+**System (Phase: `ask`)**
 ```json
 {
   "phase": "ask",
-  "state": { "q": 0, "score": 0 },
-  "data": {},
-  "ui": {
-    "screen": "question",
-    "text": "What does 'Bonjour' mean in French?",
-    "choices": [
-      { "id": 0, "label": "Good afternoon" },
-      { "id": 1, "label": "Hello / Good day" },
-      { "id": 2, "label": "Good evening" },
-      { "id": 3, "label": "Goodbye" }
+  "state": { "question_index": 0, "score": 0 },
+  "interface": {
+    "title": "Question 1",
+    "content": "Which French word means 'Thank you'?",
+    "instructions": "Select the correct answer.",
+    "input_type": "multiple_choice",
+    "options": [
+      { "id": 0, "label": "Bonjour" },
+      { "id": 1, "label": "Au revoir" },
+      { "id": 2, "label": "Merci" }
     ],
-    "input": "multiple_choice",
     "progress": 10
-  }
+  },
+  "correct_answer_id": 2
 }
 ```
 
-**Turn 4: User selects choice ID 1 (System transitions to `evaluate` phase for Q0, assuming correct)**
+**Learner Action:** Selects option with `id: 2` ("Merci") (triggers `handleOptionSelect`)
+
+**System (Phase: `evaluate`)**
 ```json
 {
   "phase": "evaluate",
-  "state": { "q": 0, "score": 1 },
-  "data": {},
-  "ui": {
-    "screen": "feedback",
-    "text": "That's correct! 'Bonjour' is a versatile greeting used throughout the day to say 'Hello' or 'Good day' in French. Excellent start!",
-    "choices": [],
-    "input": "none",
+  "state": { "question_index": 1, "score": 1 },
+  "interface": {
+    "title": "Feedback",
+    "content": "Correct! 'Merci' means 'Thank you'. You're doing great!",
+    "instructions": "Click Continue for the next question.",
+    "input_type": "none",
     "progress": 10
   }
 }
 ```
 
 ## Limitations
-*   **Fixed Curriculum**: The current question bank is hardcoded, limiting flexibility.
-*   **Limited Adaptivity**: The system does not adapt difficulty or content based on individual learner performance beyond basic scoring.
-*   **No Free-form Input**: Interaction is restricted to multiple-choice selections; there is no support for open-ended text input or conversational dialogue beyond the predefined phases.
-*   **Simulated Agents**: Agents are conceptual roles; there is no autonomous reasoning or inter-agent communication within the LLM.
-*   **Minimal State**: While an optimization, it prevents deeper conversational context or personalized learning paths that require more extensive memory.
-*   **Singular Focus**: The tutor is designed for a very narrow scope (beginner French greetings and basic phrases).
+*   **Context Window Dependency:** The system's ability to maintain a coherent pedagogical flow is highly dependent on the LLM's context window. While prompts are optimized, extremely long or complex interactions could theoretically exceed the effective context.
+*   **Static Curriculum Structure:** The current phase-based progression is linear. It lacks advanced branching logic or dynamic curriculum generation beyond the immediate micro-lesson.
+*   **Limited Adaptivity:** The system does not currently adapt difficulty or content based on a comprehensive learner profile or fine-grained error analysis.
+*   **No Spaced Repetition:** There is no built-in mechanism for spaced repetition or revisiting difficult concepts over time.
+*   **Single Modality:** Interaction is exclusively text-based; it does not incorporate audio, visual, or other modalities.
+*   **Error Handling Robustness:** While API error handling is implemented, comprehensive recovery from malformed or unparseable LLM responses still relies on re-prompting, which can occasionally lead to minor inconsistencies or repeated content.
 
 ## Future Work
-Potential enhancements include:
-*   **Adaptive Difficulty**: Implement algorithms to adjust question difficulty based on learner performance, potentially leveraging a larger, tagged question bank.
-*   **User Profiling**: Store and utilize more extensive user data (e.g., learning style, common mistakes) to further personalize content and feedback.
-*   **Expanded Curriculum**: Integrate more advanced topics, grammar, and vocabulary, perhaps with dynamically generated content from the LLM.
-*   **Multimodal Interaction**: Incorporate speech input/output for a more immersive experience, leveraging Gemini's audio capabilities.
-*   **Advanced Feedback**: Provide more granular feedback, including common error analysis and tailored remedial exercises.
-*   **Agent Specialization**: Explore more sophisticated agentic behavior, potentially by integrating dedicated models or prompts for specific agent roles, allowing for more complex pedagogical strategies.
-*   **Gamification**: Introduce elements such as points, badges, or leaderboards to enhance motivation and engagement.
+Potential enhancements for this system include:
+*   **Adaptive Difficulty:** Implement algorithms to dynamically adjust question difficulty and content complexity based on real-time learner performance.
+*   **Learner Profiling:** Develop a mechanism to build and utilize a learner profile, tracking strengths, weaknesses, and learning styles to offer more personalized content.
+*   **Expanded Curriculum:** Extend the content generation capabilities to cover a wider range of French language topics and grammatical concepts.
+*   **Multimodality:** Integrate speech recognition for verbal input and text-to-speech for audio responses, creating a more immersive conversational experience.
+*   **Spaced Repetition System:** Incorporate a robust spaced repetition algorithm to optimize memory retention of vocabulary and grammatical rules.
+*   **Enhanced Feedback:** Provide more detailed, diagnostic feedback that explains not just *if* an answer is correct, but *why*, and suggest targeted remediation.
+*   **Advanced Error Recovery:** Implement more sophisticated strategies for detecting and recovering from LLM generation errors without noticeable disruption to the learner experience.
 
 ## License
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+MIT License

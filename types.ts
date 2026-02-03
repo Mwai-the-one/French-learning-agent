@@ -1,32 +1,31 @@
-export interface Choice {
+
+export type Phase = "intro" | "teach" | "ask" | "evaluate" | "report" | "completed" | "paused";
+export type InputType = "none" | "multiple_choice";
+
+export interface Option {
   id: number;
   label: string;
 }
 
-export interface TutorState {
-  q: number;
+export interface State {
+  question_index: number;
   score: number;
 }
 
-export interface TutorUI {
-  screen: 'intro' | 'lesson' | 'question' | 'feedback' | 'final';
-  text: string;
-  choices: Choice[];
-  input: 'none' | 'multiple_choice';
+export interface Interface {
+  title: string;
+  content: string;
+  instructions: string;
+  input_type: InputType;
+  options?: Option[];
   progress: number;
 }
 
-export interface TutorResponse {
-  phase: 'intro' | 'teach' | 'ask' | 'evaluate' | 'report' | 'completed';
-  state: TutorState;
-  data: Record<string, unknown>; // Keeping flexible but expecting empty based on prompt rules
-  ui: TutorUI;
-}
-
-export interface QuestionData {
-  id: number;
-  question: string;
-  choices: Choice[];
-  correctAnswerId: number;
-  correctAnswerLabel: string;
+export interface PhaseResponse {
+  phase: Phase;
+  state: State;
+  interface: Interface;
+  // This field is used internally by App.tsx to evaluate the user's answer
+  // when the phase is 'ask'. It is not part of the 'interface' displayed to the learner.
+  correct_answer_id?: number;
 }
