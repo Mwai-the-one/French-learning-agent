@@ -1,0 +1,5 @@
+{
+  "name": "French Tutor",
+  "description": "A stateful tutor for Beginner French Language and Culture, leveraging Gemini API for dynamic lesson content and feedback.",
+  "requestFramePermissions": []
+}
